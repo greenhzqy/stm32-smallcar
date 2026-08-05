@@ -1,0 +1,45 @@
+# === Keil MDK build outputs ===
+*.o
+*.obj
+*.axf
+*.elf
+*.hex
+*.bin
+*.crf
+*.d
+*.dep
+*.lst
+*.lnp
+*.iex
+*.htm
+*.build_log.htm
+*.map
+*.sct.bak
+
+# Keil project user settings (contains local paths)
+*.uvguix.*
+*.uvgui.*
+JLinkLog.txt
+JLinkSettings.ini
+
+# RTE and debug
+MDK-ARM/RTE/
+MDK-ARM/DebugConfig/
+
+# Compiled objects/libs
+MDK-ARM/**/Listings/
+MDK-ARM/**/Objects/
+
+# === STM32CubeIDE ===
+.settings/
+Debug/
+.project
+.cproject
+STM32*.xml
+
+# === General ===
+*.bak
+*.tmp
+*~
+.DS_Store
+Thumbs.db
