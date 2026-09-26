@@ -92,17 +92,16 @@ int main(void)
   MX_GPIO_Init();
   MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
-  motor_init(); 
+  motor_init();
   OLED_Init();
-  
-  OLED_Clear(); 
 
-float Kp = 10.0f;   // 比例系数，先从80开始调
-float Ki = 0.5f;    // 积分系数，先从0.5开始调
-float Kd = 0.0f;   // 微分系数，先从30开始调
-int base_speed = 400; // 基础速度，直线的速度
-float sum_error = 0.0f;    // 积分累加
-float last_error = 0.0f;   // 上一次的偏差
+  OLED_Clear();
+
+	float Kp = 10.0f;      // 比例系数（主力纠偏）
+	float Ki = 0.15f;      // 积分系数（修正物理不对称，微调角色）
+	float Kd = 8.0f;       // 微分系数（抑制震荡）
+	float sum_error = 0.0f;    // 积分累加
+	float last_error = 0.0f;   // 上一次的偏差
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -113,6 +112,7 @@ float last_error = 0.0f;   // 上一次的偏差
 
     /* USER CODE BEGIN 3 */
 
+    // 1. 读取传感器（带去抖滤波）
     uint8_t l1 = Track_L1();
     uint8_t l2 = Track_L2();
     uint8_t r2 = Track_R2();
@@ -124,57 +124,88 @@ float last_error = 0.0f;   // 上一次的偏差
     if(l2 == 1) error += -1.0f;
     if(r2 == 1) error += +1.0f;
     if(r1 == 1) error += +3.0f;
-    
-    // 3. 处理间隙漏线/全白情况
-    if(error == 0 && l1==0 && l2==0 && r2==0 && r1==0)
+
+    // 3. �?测是否丢线（全白）并做渐进式搜索
+    static uint16_t loss_count = 0;  // 丢线持续次数（每5ms+1�?
+    uint8_t line_lost = 0;
+    if(l1==0 && l2==0 && r2==0 && r1==0)
     {
-      // 全白丢线，用上次的偏差，继续转
-      error = last_error;
+      line_lost = 1;
+      loss_count++;  // 丢得越久，计数越�?
+
+      // 确定搜索方向：线�?后在哪边就往哪边�?
+      float search_dir;
+      if(last_error > 0)      search_dir = 1.0f;   // 线在右边，往右找
+      else if(last_error < 0) search_dir = -1.0f;  // 线在左边，往左找
+      else                    search_dir = 1.0f;   // 兜底：不知道就右�?
+
+      // 丢线越久转越猛：起步3，每�?5ms�?0.5，上�?8
+      float search_power = 3.0f + (float)loss_count * 0.5f;
+      if(search_power > 8.0f) search_power = 8.0f;
+
+      error = search_dir * search_power;
     }
-    
-    // 4. PID计算
-    sum_error += error;                // 积分累加
-    // 积分限幅，防止积分饱和
-    if(sum_error > 10) sum_error = 10;
-    if(sum_error < -10) sum_error = -10;
-    
-    float diff_error = error - last_error; // 微分
-    float output = Kp*error + Ki*sum_error + Kd*diff_error; // PID输出
-    
-    // 输出限幅，防止速度差太大
+    else
+    {
+      loss_count = 0;  // 找到线了，重置丢线计�?
+    }
+
+    // 4. PID计算（丢线时冻结积分，防止饱和）
+    if(!line_lost)
+    {
+      sum_error += error;  // 正常巡线才累加积�?
+    }
+    // 积分限幅
+    if(sum_error > 3) sum_error = 3;
+    if(sum_error < -3) sum_error = -3;
+
+    float diff_error = error - last_error;
+    float output = Kp*error + Ki*sum_error + Kd*diff_error;
+
+    // 输出限幅
     if(output > 400) output = 400;
     if(output < -400) output = -400;
-    
-    // 5. 控制电机
+
+    // 5. 弯道自�?�应降�?�：偏差越大 = 弯越�? = 速度越低
+    float abs_error = (error > 0) ? error : -error;  // 取绝对�??
+    int base_speed;
+    if(abs_error > 3.0f) {
+        base_speed = 250;   // 急弯/丢线搜索：慢速过
+    } else if(abs_error > 1.5f) {
+        base_speed = 350;   // 缓弯：中�?
+    } else {
+        base_speed = 450;   // 直线：全�?
+    }
+
+    // 6. 控制电机
     int left_speed = base_speed - output;
     int right_speed = base_speed + output;
-    
+
     // 防止速度溢出
     if(left_speed < 0) left_speed = 0;
     if(right_speed < 0) right_speed = 0;
     if(left_speed > 999) left_speed = 999;
     if(right_speed > 999) right_speed = 999;
-    
+
     motor_setspeed(left_speed, right_speed);
-    
-    // 6. 保存上一次的偏差
+
+    // 7. 保存上一次的偏差
     last_error = error;
-    
-    // 7. OLED显示调试信息（可选）
+
+    // 8. OLED显示调试信息（每200ms刷新�?次）
     static uint32_t oled_timer = 0;
-    if(HAL_GetTick() - oled_timer > 1000)
+    if(HAL_GetTick() - oled_timer > 500)
     {
       oled_timer = HAL_GetTick();
-      
-      OLED_ShowNum(2,0,error*10,2); // 显示偏差，乘10方便看小数
-      OLED_ShowNum(4,0,output,4);
-    }
-  
 
-// ======================================================
+      OLED_ShowNum(2,0,error*10,2);     // 偏差×10
+      OLED_ShowNum(4,0,base_speed,4);   // 当前基础速度
     }
-    
-  
+
+    // 9. 固定控制周期 5ms�?200Hz），保证PID积分/微分按时间计�?
+    HAL_Delay(5);
+  }
+
   /* USER CODE END 3 */
 }
 
